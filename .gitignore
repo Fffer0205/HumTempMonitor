@@ -1,0 +1,28 @@
+# Keil MDK 编译产物（匹配任意目录层级）
+*.o
+*.crf
+*.build_log.htm
+*.dep
+*.hex
+*.axf
+*.lnp
+*.map
+*.htm
+*.sct
+*.lst
+*.dbgconf
+*.scvd
+*.d
+
+# Keil 用户/窗口配置
+*.uvguix.*
+*.uvoptx
+JLinkLog.txt
+JLinkSettings.ini
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# 追踪以下项目级配置（取消忽略）
+!.gitkeep
