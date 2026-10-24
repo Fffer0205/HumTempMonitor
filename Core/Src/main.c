@@ -58,6 +58,7 @@ void SystemClock_Config(void);
 #include "oled.h"
 #include "aht21.h"
 #include "ds18b20.h"
+#include "ds1302.h"
 /* USER CODE END 0 */
 
 /**
@@ -95,41 +96,168 @@ int main(void)
   OLED_ShowString(20,0,"Hum_Temp_Monitor",16); //
   AHT21_Init();       //AHT21 温湿度传感器初始化
   DS18B20_Init();     //DS18B20 温度传感器初始化
+  DS1302_Init();      //DS1302 实时时钟初始化
+  DS1302_StartClock();//确保时钟在走
+
+  /* 首次上电时写入一个初始时间（可按需修改）：
+   * 2026-10-24 周六 12:00:00
+   * 若外部晶振/后备电池正常，再次上电后时间会持续累加，此句可注释掉 */
+  {
+    DS1302_Time_t init_time = {26, 10, 24, 7, 12, 0, 0};
+    DS1302_SetTime(&init_time);
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  char buf[6];
+  char buf[12];
   float humidity = 0.0f, temperature = 0.0f, ds_temp = 0.0f;
+  DS1302_Time_t edit;
+  DS1302_GetTime(&edit);        /* 首次初始化编辑副本，避免未定义值 */
+  uint8_t page = 0;              /* 0=温湿度页, 1=时间页 */
+  uint32_t pageTick = HAL_GetTick();   /* 自动翻页时刻 */
+  const uint32_t PAGE_MS = 5000;      /* 空闲时每页停留 5 秒 */
+  const uint32_t EDIT_TIMEOUT_MS = 10000; /* 编辑时 10 秒无操作自动恢复翻页 */
+
+  /* 星期英文名：index = (week-1)，1=周日...7=周六 */
+  static const char *week_name[] = {"Sunday","Monday","Tuesday","Wednesday",
+                                    "Thursday","Friday","Saturday"};
+
+  /* 时间编辑状态 */
+  uint8_t key1_last = 1, key2_last = 1;  /* 上一次按键电平，用于沿检测 */
+  uint8_t edit_idx = 0;                  /* 0=不编辑；1..6=选择年/月/日/时/分/秒 */
+  uint32_t lastActivity = 0;             /* 最近一次按键活动时刻，用于编辑锁定 */
+  const char *edit_hint[] = {"", "Year", "Month", "Day", "Hour", "Min", "Sec"};
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if (AHT21_ReadData(&humidity, &temperature) == 0)
-    {
-      /* 显示温度 */
-      OLED_ShowString(0, 2, "Temp:", 16);
-      sprintf(buf, "%5.1f", temperature);
-      OLED_ShowString(48, 2, (uint8_t *)buf, 16);
-      OLED_ShowString(96, 2, "C", 16);
+    uint32_t now = HAL_GetTick();
 
-      /* 显示湿度 */
-      OLED_ShowString(0, 4, "Humi:", 16);
-      sprintf(buf, "%5.1f", humidity);
-      OLED_ShowString(48, 4, (uint8_t *)buf, 16);
-      OLED_ShowString(96, 4, "%", 16);
+    /* 编辑锁定：编辑中若 10 秒无任何按键，自动保存并退出，恢复自动翻页 */
+    if (edit_idx != 0 && now - lastActivity >= EDIT_TIMEOUT_MS)
+    {
+      edit_idx = 0;
+      DS1302_SetTime(&edit);
     }
 
-    /* 读取 DS18B20 温度显示在温湿度下方 */
-    if (DS18B20_GetTemp(&ds_temp) == 0)
+    /* 自动翻页：仅在非编辑状态下进行，编辑中锁定当前页不翻页 */
+    if (edit_idx == 0 && now - pageTick >= PAGE_MS)
     {
-      OLED_ShowString(0, 6, "DS18:", 16);
-      sprintf(buf, "%5.1f", ds_temp);
-      OLED_ShowString(48, 6, (uint8_t *)buf, 16);
-      OLED_ShowString(96, 6, "C", 16);
+      pageTick = now;
+      page = !page;              /* 0/1 交替 */
+      OLED_Clear();
+      if (page == 0)
+        OLED_ShowString(20, 0, "Hum_Temp_Monitor", 16);
     }
-    HAL_Delay(1000);   /* 每秒刷新一次 */
+
+    /* ---- 按键处理（低电平有效，沿检测） ---- */
+    if (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == 0 && key1_last == 1)
+    {
+      lastActivity = now;        /* 刷新活动时刻，锁定编辑 */
+      if (page != 1)             /* 从任意页按下，强制进入时间页 */
+      {
+        page = 1;
+        pageTick = now;
+        OLED_Clear();
+      }
+      edit_idx++;                /* KEY1：切换编辑字段/退出保存 */
+      if (edit_idx > 6)
+        edit_idx = 0;
+      if (edit_idx == 0)
+      {
+        DS1302_SetTime(&edit);   /* 循环回 0：保存退出 */
+        OLED_Clear();
+        OLED_ShowString(20, 0, "Hum_Temp_Monitor", 16);
+      }
+    }
+    key1_last = (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == 0) ? 0 : 1;
+
+    if (HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin) == 0 && key2_last == 1)
+    {
+      lastActivity = now;        /* 刷新活动时刻 */
+      if (page != 1)
+      {
+        page = 1;
+        pageTick = now;
+        OLED_Clear();
+      }
+      if (edit_idx == 0)         /* 未编辑时先进入编辑（选中小时） */
+        edit_idx = 4;
+      else
+      {
+        /* KEY2：当前被选字段 +1 */
+        switch (edit_idx)
+        {
+          case 1: edit.year   = (edit.year + 1) % 100;    break;
+          case 2: edit.month  = (edit.month % 12) + 1;    break;
+          case 3: edit.day    = (edit.day % 31) + 1;      break;
+          case 4: edit.hour   = (edit.hour % 24) + 1;     break;
+          case 5: edit.minute = (edit.minute % 60) + 1;   break;
+          case 6: edit.second = (edit.second % 60) + 1;   break;
+        }
+      }
+    }
+    key2_last = (HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin) == 0) ? 0 : 1;
+
+    if (page == 0)
+    {
+      /* 第 1 页：温湿度 + DS18B20（16 字号布局） */
+      if (AHT21_ReadData(&humidity, &temperature) == 0)
+      {
+        OLED_ShowString(0, 2, "Temp:", 16);
+        sprintf(buf, "%5.1f", temperature);
+        OLED_ShowString(56, 2, (uint8_t *)buf, 16);
+        OLED_ShowString(100, 2, " C", 16);
+
+        OLED_ShowString(0, 4, "Humi:", 16);
+        sprintf(buf, "%5.1f", humidity);
+        OLED_ShowString(56, 4, (uint8_t *)buf, 16);
+        OLED_ShowString(100, 4, " %", 16);
+      }
+
+      if (DS18B20_GetTemp(&ds_temp) == 0)
+      {
+        OLED_ShowString(0, 6, "DS18:", 16);
+        sprintf(buf, "%5.1f", ds_temp);
+        OLED_ShowString(56, 6, (uint8_t *)buf, 16);
+        OLED_ShowString(100, 6, " C", 16);
+      }
+    }
+    else
+    {
+      /* 第 2 页：时间编辑/显示。用 16 大字号直接显示日期和时间，
+       * 编辑时直接在原数字上修改，不做缩小。无顶部标题，全屏用于内容。
+       * 仅在非编辑状态才从 DS1302 刷新 edit，
+       * 避免覆盖编辑中 KEY2 已修改的值。 */
+      if (edit_idx == 0)
+        DS1302_GetTime(&edit);
+
+      /* Date: 2026-10-24  */
+      OLED_ShowString(0, 0, "Date:", 16);
+      sprintf(buf, "20%02d-%02d-%02d", edit.year, edit.month, edit.day);
+      OLED_ShowString(40, 0, (uint8_t *)buf, 16);
+
+      /* Week: 星期几英文 */
+      OLED_ShowString(0, 2, "Week:", 16);
+      if (edit.week >= 1 && edit.week <= 7)
+        OLED_ShowString(40, 2, (uint8_t *)week_name[edit.week - 1], 16);
+
+      /* Time: 12:34:56 */
+      OLED_ShowString(0, 4, "Time:", 16);
+      sprintf(buf, "%02d:%02d:%02d", edit.hour, edit.minute, edit.second);
+      OLED_ShowString(40, 4, (uint8_t *)buf, 16);
+
+      /* 编辑状态提示（8 字号，位于最底部一行，不挤占内容） */
+      if (edit_idx != 0)
+      {
+        OLED_ShowString(0, 6, "Edit>", 8);
+        OLED_ShowString(40, 6, (uint8_t *)edit_hint[edit_idx], 8);
+      }
+    }
+
+    HAL_Delay(100);   /* 10Hz 刷新 */
   }
   /* USER CODE END 3 */
 }
