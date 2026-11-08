@@ -68,6 +68,7 @@ typedef struct {
 void DS1302_Init(void);                              /* 初始化 GPIO */
 void DS1302_SetTime(const DS1302_Time_t *time);      /* 设置时间 */
 void DS1302_GetTime(DS1302_Time_t *time);            /* 读取时间 */
+uint8_t DS1302_IsClockHalted(void);                  /* 时钟是否停走（CH=1） */
 void DS1302_StartClock(void);                        /* 开启时钟（清除 CH 停止位） */
 
 #endif /* __DS1302_H */

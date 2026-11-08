@@ -19,11 +19,15 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "gpio.h"
-#include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "oled.h"
+#include "app_power.h"
+#include "app_sensor.h"
+#include "app_time.h"
+#include "app_ui.h"
+#include "app_imu.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -33,7 +37,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define APP_DRAW_PERIOD_MS   200UL   /* 亮屏时的重绘周期（5Hz） */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -55,10 +59,7 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#include "oled.h"
-#include "aht21.h"
-#include "ds18b20.h"
-#include "ds1302.h"
+
 /* USER CODE END 0 */
 
 /**
@@ -91,43 +92,25 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
-  OLED_Init();			//OLED  
+  OLED_Init();            /* OLED 初始化（清屏 + 开显示） */
   OLED_Clear();
-  OLED_ShowString(20,0,"Hum_Temp_Monitor",16); //
-  AHT21_Init();       //AHT21 温湿度传感器初始化
-  DS18B20_Init();     //DS18B20 温度传感器初始化
-  DS1302_Init();      //DS1302 实时时钟初始化
-  DS1302_StartClock();//确保时钟在走
 
-  /* 首次上电时写入一个初始时间（可按需修改）：
-   * 2026-10-24 周六 12:00:00
-   * 若外部晶振/后备电池正常，再次上电后时间会持续累加，此句可注释掉 */
-  {
-    DS1302_Time_t init_time = {26, 10, 24, 7, 12, 0, 0};
-    DS1302_SetTime(&init_time);
-  }
+  AppPower_Init();        /* 按键 EXTI、显示状态、STOP 相关初始化 */
+  AppSensor_Init();       /* AHT21 / DS18B20 / 电池 ADC */
+  AppTime_Init();         /* DS1302 初始化、处理时钟停走、读入缓存 */
+  AppIMU_Init();          /* ADXL345：抬手检测 + INT2 唤醒源 */
+
+  AppPower_DisplayOn();   /* 上电先点亮屏幕 */
+  AppIMU_ScreenOn();      /* 亮屏期间关掉活动中断 */
+  AppSensor_ForceSample(HAL_GetTick());
+  AppTime_Invalidate();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  char buf[12];
-  float humidity = 0.0f, temperature = 0.0f, ds_temp = 0.0f;
-  DS1302_Time_t edit;
-  DS1302_GetTime(&edit);        /* 首次初始化编辑副本，避免未定义值 */
-  uint8_t page = 0;              /* 0=温湿度页, 1=时间页 */
-  uint32_t pageTick = HAL_GetTick();   /* 自动翻页时刻 */
-  const uint32_t PAGE_MS = 5000;      /* 空闲时每页停留 5 秒 */
-  const uint32_t EDIT_TIMEOUT_MS = 10000; /* 编辑时 10 秒无操作自动恢复翻页 */
+  uint32_t last_draw = 0;
+  uint8_t  need_draw = 1;
 
-  /* 星期英文名：index = (week-1)，1=周日...7=周六 */
-  static const char *week_name[] = {"Sunday","Monday","Tuesday","Wednesday",
-                                    "Thursday","Friday","Saturday"};
-
-  /* 时间编辑状态 */
-  uint8_t key1_last = 1, key2_last = 1;  /* 上一次按键电平，用于沿检测 */
-  uint8_t edit_idx = 0;                  /* 0=不编辑；1..6=选择年/月/日/时/分/秒 */
-  uint32_t lastActivity = 0;             /* 最近一次按键活动时刻，用于编辑锁定 */
-  const char *edit_hint[] = {"", "Year", "Month", "Day", "Hour", "Min", "Sec"};
   while (1)
   {
     /* USER CODE END WHILE */
@@ -135,131 +118,77 @@ int main(void)
     /* USER CODE BEGIN 3 */
     uint32_t now = HAL_GetTick();
 
-    /* 编辑锁定：编辑中若 10 秒无任何按键，自动保存并退出，恢复自动翻页 */
-    if (edit_idx != 0 && now - lastActivity >= EDIT_TIMEOUT_MS)
+    /* ---- 熄屏：进入 STOP，等按键或加速度计把 MCU 叫醒 ---- */
+    if (!AppPower_IsDisplayOn())
     {
-      edit_idx = 0;
-      DS1302_SetTime(&edit);
-    }
+      uint8_t woke = 0;
 
-    /* 自动翻页：仅在非编辑状态下进行，编辑中锁定当前页不翻页 */
-    if (edit_idx == 0 && now - pageTick >= PAGE_MS)
-    {
-      pageTick = now;
-      page = !page;              /* 0/1 交替 */
-      OLED_Clear();
-      if (page == 0)
-        OLED_ShowString(20, 0, "Hum_Temp_Monitor", 16);
-    }
+      AppIMU_PrepareSleep();          /* 降速到 25Hz + 打开活动中断 */
 
-    /* ---- 按键处理（低电平有效，沿检测） ---- */
-    if (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == 0 && key1_last == 1)
-    {
-      lastActivity = now;        /* 刷新活动时刻，锁定编辑 */
-      if (page != 1)             /* 从任意页按下，强制进入时间页 */
+#if (APP_STOP_WHILE_DEBUGGED == 0)
+      if (AppPower_DebuggerAttached())
       {
-        page = 1;
-        pageTick = now;
-        OLED_Clear();
+        /* 台架模式：调试器连着时进 STOP 会让 SWD 掉线，就不睡了，
+         * 直接轮询动作判定。功耗较高，只用于带调试器验证算法。 */
+        if (AppIMU_DetectWake() || AppPower_PollWakeKey())
+          woke = 1;
+        else
+          HAL_Delay(100);
       }
-      edit_idx++;                /* KEY1：切换编辑字段/退出保存 */
-      if (edit_idx > 6)
-        edit_idx = 0;
-      if (edit_idx == 0)
-      {
-        DS1302_SetTime(&edit);   /* 循环回 0：保存退出 */
-        OLED_Clear();
-        OLED_ShowString(20, 0, "Hum_Temp_Monitor", 16);
-      }
-    }
-    key1_last = (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == 0) ? 0 : 1;
-
-    if (HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin) == 0 && key2_last == 1)
-    {
-      lastActivity = now;        /* 刷新活动时刻 */
-      if (page != 1)
-      {
-        page = 1;
-        pageTick = now;
-        OLED_Clear();
-      }
-      if (edit_idx == 0)         /* 未编辑时先进入编辑（选中小时） */
-        edit_idx = 4;
       else
+#endif
       {
-        /* KEY2：当前被选字段 +1 */
-        switch (edit_idx)
-        {
-          case 1: edit.year   = (edit.year + 1) % 100;    break;
-          case 2: edit.month  = (edit.month % 12) + 1;    break;
-          case 3: edit.day    = (edit.day % 31) + 1;      break;
-          case 4: edit.hour   = (edit.hour % 24) + 1;     break;
-          case 5: edit.minute = (edit.minute % 60) + 1;   break;
-          case 6: edit.second = (edit.second % 60) + 1;   break;
-        }
-      }
-    }
-    key2_last = (HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin) == 0) ? 0 : 1;
+        uint8_t src = AppPower_EnterStop();  /* 返回时时钟已恢复，屏幕仍熄灭 */
 
-    if (page == 0)
+        if (src & APP_WAKE_KEY)
+          woke = 1;               /* 按键唤醒：直接亮屏，这一下不进入编辑 */
+        else if ((src & APP_WAKE_IMU) && AppIMU_DetectWake())
+          woke = 1;               /* 活动中断之后还要确认是不是“要看的动作” */
+      }
+
+      if (!woke)
+        continue;                 /* 不是操作：回去接着睡 */
+
+      AppPower_DisplayOn();
+      AppIMU_ScreenOn();
+      now = HAL_GetTick();
+
+      /* STOP 期间 SysTick 停止，tick 不会前进：
+       * 按“现在”重新对齐采样节拍并强制重读时钟，否则会以为没到采样时间 */
+      AppSensor_ForceSample(now);
+      AppTime_Invalidate();
+      need_draw = 1;
+    }
+
+    /* ---- 按键 ----
+     * 亮屏时：把按下沿交给时间编辑器，自己处理不判断具体语义 */
     {
-      /* 第 1 页：温湿度 + DS18B20（16 字号布局） */
-      if (AHT21_ReadData(&humidity, &temperature) == 0)
+      uint8_t events = AppPower_PollKeys(now);
+      if (events != 0)
       {
-        OLED_ShowString(0, 2, "Temp:", 16);
-        sprintf(buf, "%5.1f", temperature);
-        OLED_ShowString(56, 2, (uint8_t *)buf, 16);
-        OLED_ShowString(100, 2, " C", 16);
-
-        OLED_ShowString(0, 4, "Humi:", 16);
-        sprintf(buf, "%5.1f", humidity);
-        OLED_ShowString(56, 4, (uint8_t *)buf, 16);
-        OLED_ShowString(100, 4, " %", 16);
-      }
-
-      if (DS18B20_GetTemp(&ds_temp) == 0)
-      {
-        OLED_ShowString(0, 6, "DS18:", 16);
-        sprintf(buf, "%5.1f", ds_temp);
-        OLED_ShowString(56, 6, (uint8_t *)buf, 16);
-        OLED_ShowString(100, 6, " C", 16);
+        AppTime_HandleKey(events, now);
+        need_draw = 1;
       }
     }
-    else
+
+    /* ---- 亮屏：刷新时钟/传感器，并按 5Hz 重绘 ---- */
+    AppTime_Update(now);
+    AppSensor_Update(now);
+
+    if (need_draw || (uint32_t)(now - last_draw) >= APP_DRAW_PERIOD_MS)
     {
-      /* 第 2 页：时间编辑/显示。用 16 大字号直接显示日期和时间，
-       * 编辑时直接在原数字上修改，不做缩小。无顶部标题，全屏用于内容。
-       * 仅在非编辑状态才从 DS1302 刷新 edit，
-       * 避免覆盖编辑中 KEY2 已修改的值。 */
-      if (edit_idx == 0)
-        DS1302_GetTime(&edit);
-
-      /* Date: 2026-10-24  */
-      OLED_ShowString(0, 0, "Date:", 16);
-      sprintf(buf, "20%02d-%02d-%02d", edit.year, edit.month, edit.day);
-      OLED_ShowString(40, 0, (uint8_t *)buf, 16);
-
-      /* Week: 星期几英文 */
-      OLED_ShowString(0, 2, "Week:", 16);
-      if (edit.week >= 1 && edit.week <= 7)
-        OLED_ShowString(40, 2, (uint8_t *)week_name[edit.week - 1], 16);
-
-      /* Time: 12:34:56 */
-      OLED_ShowString(0, 4, "Time:", 16);
-      sprintf(buf, "%02d:%02d:%02d", edit.hour, edit.minute, edit.second);
-      OLED_ShowString(40, 4, (uint8_t *)buf, 16);
-
-      /* 编辑状态提示（8 字号，位于最底部一行，不挤占内容） */
-      if (edit_idx != 0)
-      {
-        OLED_ShowString(0, 6, "Edit>", 8);
-        OLED_ShowString(40, 6, (uint8_t *)edit_hint[edit_idx], 8);
-      }
+      last_draw = now;
+      need_draw = 0;
+      AppUI_Draw();
     }
 
-    HAL_Delay(100);   /* 10Hz 刷新 */
+    /* ---- 15 秒无按键：熄屏，下一圈进入 STOP ---- */
+    if (AppPower_IdleExpired(now))
+      AppPower_DisplayOff();
+
+    HAL_Delay(20);
+    /* USER CODE END 3 */
   }
-  /* USER CODE END 3 */
 }
 
 /**
@@ -339,3 +268,4 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+

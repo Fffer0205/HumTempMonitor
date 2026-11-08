@@ -53,7 +53,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+void SystemClock_Config(void);   /* 由 main.c 实现；从 STOP 唤醒后需要重新调用 */
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

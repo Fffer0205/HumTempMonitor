@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32L051xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32L0xx_HAL_Driver/Inc;../Drivers/STM32L0xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32L0xx/Include;../Drivers/CMSIS/Include;../HARDWARE/OLED;../HARDWARE/AHT21;../HARDWARE/DS18B20;../HARDWARE/DS1302</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32L0xx_HAL_Driver/Inc;../Drivers/STM32L0xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32L0xx/Include;../Drivers/CMSIS/Include;../APP;../HARDWARE/OLED;../HARDWARE/AHT21;../HARDWARE/SoftI2C;../HARDWARE/ADXL345;../HARDWARE/DS18B20;../HARDWARE/DS1302;../HARDWARE/Battery</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -509,6 +509,11 @@
               <FileType>1</FileType>
               <FilePath>..\HARDWARE\OLED\oled.c</FilePath>
             </File>
+            <File>
+              <FileName>oled_gfx.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\HARDWARE\OLED\oled_gfx.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -518,6 +523,26 @@
               <FileName>aht21.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\HARDWARE\AHT21\aht21.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>BSP/SoftI2C</GroupName>
+          <Files>
+            <File>
+              <FileName>soft_i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\HARDWARE\SoftI2C\soft_i2c.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>BSP/ADXL345</GroupName>
+          <Files>
+            <File>
+              <FileName>adxl345.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\HARDWARE\ADXL345\adxl345.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -538,6 +563,46 @@
               <FileName>ds1302.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\HARDWARE\DS1302\ds1302.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>BSP/Battery</GroupName>
+          <Files>
+            <File>
+              <FileName>battery.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\HARDWARE\Battery\battery.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Application/User/App</GroupName>
+          <Files>
+            <File>
+              <FileName>app_power.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\app_power.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_sensor.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\app_sensor.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_time.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\app_time.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_ui.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\app_ui.c</FilePath>
+            </File>
+            <File>
+              <FileName>app_imu.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\APP\app_imu.c</FilePath>
             </File>
           </Files>
         </Group>

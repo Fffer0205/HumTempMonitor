@@ -9,6 +9,7 @@
 #define DS18B20_SKIP_ROM      0xCC
 #define DS18B20_CONVERT_T     0x44
 #define DS18B20_READ_SCRATCH  0xBE
+#define DS18B20_WRITE_SCRATCH 0x4E
 
 /* 微秒级延时：基于 SysTick 向下计数值（VAL），兼容 HAL_Delay 同用的 SysTick。
  * SysTick 每 1 个时钟周期减 1，因此 us 微秒所需 tick 数 = us * (主频/1000000)。*/
@@ -119,11 +120,54 @@ void DS18B20_Init(void)
 }
 
 /**
- * @brief 读取温度
+ * @brief 设置温度转换分辨率
+ * @param bits 分辨率 9~12（对应 0.5 / 0.25 / 0.125 / 0.0625 ℃）
+ * @retval 0：成功；1：器件不存在
+ * @note  分辨率只写进暂存器（掉电失效），不写 EEPROM，避免反复擦写。
+ *        分辨率越低转换越快：9bit = 93.75ms，12bit = 750ms。
+ */
+uint8_t DS18B20_SetResolution(uint8_t bits)
+{
+    uint8_t cfg;
+
+    if (bits < 9)  bits = 9;
+    if (bits > 12) bits = 12;
+
+    cfg = (uint8_t)(0x1Fu | (uint8_t)((bits - 9) << 5));  /* bit6:5 = R1:R0 */
+
+    if (ds18b20_reset())
+        return 1;
+
+    ds18b20_write_byte(DS18B20_SKIP_ROM);
+    ds18b20_write_byte(DS18B20_WRITE_SCRATCH);
+    ds18b20_write_byte(0x4B);   /* TH：报警上限，保持默认 */
+    ds18b20_write_byte(0x46);   /* TL：报警下限，保持默认 */
+    ds18b20_write_byte(cfg);    /* 配置寄存器 */
+
+    return 0;
+}
+
+/**
+ * @brief 启动一次温度转换（不复位等待）
+ * @retval 0：成功；1：器件不存在
+ */
+uint8_t DS18B20_StartConvert(void)
+{
+    if (ds18b20_reset())
+        return 1;
+
+    ds18b20_write_byte(DS18B20_SKIP_ROM);
+    ds18b20_write_byte(DS18B20_CONVERT_T);
+
+    return 0;
+}
+
+/**
+ * @brief 读取上一次转换的温度结果
  * @param temp 温度输出（单位 ℃）
  * @retval 0：成功；1：器件不存在
  */
-uint8_t DS18B20_GetTemp(float *temp)
+uint8_t DS18B20_ReadTemp(float *temp)
 {
     uint8_t low, high;
     uint8_t scratch[9];
@@ -133,17 +177,7 @@ uint8_t DS18B20_GetTemp(float *temp)
     if (temp == NULL)
         return 1;
 
-    /* 1. 复位 + 跳过 ROM + 启动温度转换 */
-    if (ds18b20_reset())
-        return 1;
-
-    ds18b20_write_byte(DS18B20_SKIP_ROM);
-    ds18b20_write_byte(DS18B20_CONVERT_T);
-
-    /* 2. 等待转换完成：12bit 分辨率最大需 750ms */
-    HAL_Delay(760);
-
-    /* 3. 复位 + 跳过 ROM + 读取暂存器(9字节) */
+    /* 复位 + 跳过 ROM + 读取暂存器(9字节) */
     if (ds18b20_reset())
         return 1;
 
@@ -162,4 +196,25 @@ uint8_t DS18B20_GetTemp(float *temp)
     *temp = (float)raw * 0.0625f;   /* 12bit 分辨率：LSB = 0.0625℃ */
 
     return 0;
+}
+
+/**
+ * @brief 读取温度（阻塞式：启动转换后等待 760ms 再读结果）
+ * @param temp 温度输出（单位 ℃）
+ * @retval 0：成功；1：器件不存在
+ */
+uint8_t DS18B20_GetTemp(float *temp)
+{
+    if (temp == NULL)
+        return 1;
+
+    /* 1. 复位 + 跳过 ROM + 启动温度转换 */
+    if (DS18B20_StartConvert())
+        return 1;
+
+    /* 2. 等待转换完成：12bit 分辨率最大需 750ms */
+    HAL_Delay(760);
+
+    /* 3. 读取结果 */
+    return DS18B20_ReadTemp(temp);
 }

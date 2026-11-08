@@ -135,6 +135,13 @@ void DS1302_Init(void)
     DS1302_IO_OUT();
 }
 
+/* 查询时钟是否处于停止状态：秒寄存器 CH 位为 1 表示振荡器停走，
+ * 通常意味着后备电池也掉过电、时间尚未设置过。 */
+uint8_t DS1302_IsClockHalted(void)
+{
+    return (ds1302_read_reg(DS1302_SEC) & 0x80) ? 1 : 0;
+}
+
 /* 开启时钟：清除秒寄存器的 CH 时钟停止位，
  * 但保留 WP 写保护位为 1（锁定），防止误写寄存器的时钟值。 */
 void DS1302_StartClock(void)
