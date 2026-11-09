@@ -11,11 +11,23 @@
 
 static AppSensor_t s_data;
 
+/* 合理温度范围：超出即认为本次读数不可信。
+ * 除了挡住总线干扰造成的乱码，也顺带排除 DS18B20 的经典误读——
+ * 上电默认值 / 转换未完成时寄存器里是 85℃，正好落在范围之外。 */
+#define APP_TEMP_MIN_C   (-40.0f)
+#define APP_TEMP_MAX_C   (80.0f)
+
 static uint32_t s_last_aht;     /* 上次 AHT21 采样时刻 */
 static uint32_t s_last_ds;      /* 上次发起 DS18B20 转换的时刻 */
 static uint32_t s_ds_start;     /* 本次 DS18B20 转换开始时刻 */
 static uint32_t s_last_bat;     /* 上次电池采样时刻 */
 static uint8_t  s_ds_busy;      /* DS18B20 正在转换中 */
+
+/* 读数是否落在合理范围内（NaN 也会被判为无效） */
+static uint8_t temp_plausible(float t)
+{
+  return (uint8_t)((t >= APP_TEMP_MIN_C) && (t <= APP_TEMP_MAX_C));
+}
 
 void AppSensor_Init(void)
 {
@@ -53,9 +65,23 @@ void AppSensor_Update(uint32_t now_ms)
   /* ---------- AHT21 温湿度 ---------- */
   if ((uint32_t)(now_ms - s_last_aht) >= APP_AHT_PERIOD_MS)
   {
+    float h, t;
+
     s_last_aht = now_ms;
-    if (AHT21_ReadData(&s_data.aht_h, &s_data.aht_t) == 0)
+
+    /* 先读到临时变量，失败时不动 s_data，保留上一次的值只当“历史数据”，
+     * 同时把有效标志清掉，显示层就只会用另一路传感器 */
+    if ((AHT21_ReadData(&h, &t) == 0) && temp_plausible(t)
+        && (h >= 0.0f) && (h <= 100.0f))
+    {
+      s_data.aht_h  = h;
+      s_data.aht_t  = t;
       s_data.aht_ok = 1;
+    }
+    else
+    {
+      s_data.aht_ok = 0;
+    }
   }
 
   /* ---------- DS18B20 温度（非阻塞两段式） ---------- */
@@ -67,12 +93,25 @@ void AppSensor_Update(uint32_t now_ms)
       s_ds_busy  = 1;
       s_ds_start = now_ms;
     }
+    else
+    {
+      s_data.ds_ok = 0;         /* 无存在脉冲：本轮拿不到数据 */
+    }
   }
   if (s_ds_busy && (uint32_t)(now_ms - s_ds_start) >= APP_DS_CONV_MS)
   {
+    float t;
+
     s_ds_busy = 0;
-    if (DS18B20_ReadTemp(&s_data.ds_t) == 0)
+    if ((DS18B20_ReadTemp(&t) == 0) && temp_plausible(t))
+    {
+      s_data.ds_t  = t;
       s_data.ds_ok = 1;
+    }
+    else
+    {
+      s_data.ds_ok = 0;
+    }
   }
 
   /* ---------- 电池电压（ADC 只在测量期间上电） ---------- */
@@ -91,11 +130,19 @@ const AppSensor_t *AppSensor_Get(void)
   return &s_data;
 }
 
-float AppSensor_AverageTemp(const AppSensor_t *s)
+uint8_t AppSensor_DisplayTemp(const AppSensor_t *s, float *temp)
 {
+  if (temp == NULL)
+    return 0;
+
   if (s->aht_ok && s->ds_ok)
-    return (s->aht_t + s->ds_t) * 0.5f;
-  if (s->aht_ok)
-    return s->aht_t;
-  return s->ds_t;
+    *temp = (s->aht_t + s->ds_t) * 0.5f;
+  else if (s->aht_ok)
+    *temp = s->aht_t;
+  else if (s->ds_ok)
+    *temp = s->ds_t;
+  else
+    return 0;                   /* 两路都无效 */
+
+  return 1;
 }

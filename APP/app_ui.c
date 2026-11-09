@@ -95,6 +95,7 @@ static void draw_monitor_area(const AppSensor_t *s)
 {
   char    buf[24];
   uint8_t humi;
+  float   temp;
   int     y;
 
   /* 分区标签（各自在半幅内居中） */
@@ -105,9 +106,10 @@ static void draw_monitor_area(const AppSensor_t *s)
   for (y = 11; y <= 52; y += 2)
     GFX_Pixel(64, y);
 
-  /* ---------- 主值：AHT21 与 DS18B20 的平均温度 ---------- */
-  if (s->aht_ok || s->ds_ok)
-    sprintf(buf, "%.1f", AppSensor_AverageTemp(s));
+  /* ---------- 主值：AHT21 与 DS18B20 的有效温度 ----------
+   * 两路都正常取平均，只有一路正常就显示那一路，都失效显示 "--.-" */
+  if (AppSensor_DisplayTemp(s, &temp))
+    sprintf(buf, "%.1f", temp);
   else
     strcpy(buf, "--.-");
 

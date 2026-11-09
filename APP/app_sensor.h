@@ -24,8 +24,8 @@ typedef struct
   float   aht_h;      /* AHT21 湿度（%RH）  */
   float   ds_t;       /* DS18B20 温度（℃）  */
   float   vbat;       /* 电池电压（V）      */
-  uint8_t aht_ok;     /* 是否已成功读到过 AHT21 数据 */
-  uint8_t ds_ok;      /* 是否已成功读到过 DS18B20 数据 */
+  uint8_t aht_ok;     /* 最近一次 AHT21 采样是否有效 */
+  uint8_t ds_ok;      /* 最近一次 DS18B20 采样是否有效 */
   uint8_t bat_ok;     /* 电池读数是否有效 */
   uint8_t bat_pct;    /* 剩余电量 0~100 */
 } AppSensor_t;
@@ -35,7 +35,8 @@ void AppSensor_Update(uint32_t now_ms);       /* 到点采样（非阻塞） */
 void AppSensor_ForceSample(uint32_t now_ms);  /* 让下一次 Update 立即全部采样 */
 const AppSensor_t *AppSensor_Get(void);       /* 取最近一次采样结果 */
 
-/* 显示用平均温度：两者都有取平均，只有一路时用另一路 */
-float AppSensor_AverageTemp(const AppSensor_t *s);
+/* 显示用温度：两路都有效取平均，只有一路有效时用该路。
+ * 两路都无效时不写 *temp 并返回 0，由界面显示 "--.-"。 */
+uint8_t AppSensor_DisplayTemp(const AppSensor_t *s, float *temp);
 
 #endif /* __APP_SENSOR_H */
